@@ -119,7 +119,7 @@ Log in using your **Ubuntu system credentials** (ensure the user account belongs
 
 To keep all client-facing protocols (SMB, NFS, S3) terminating on a single instance, RGW runs on the Ubuntu gateway VM itself rather than on the Proxmox host. This is additive to the Ceph cluster — it does not modify or replace anything managed by `pveceph` — but it does mean RGW's lifecycle (installs, upgrades, restarts) is handled manually on the VM instead of through the Proxmox Ceph GUI.
 
-> **Caveat — HTTP only:** the `beast` frontend below is configured for plain HTTP on port `7480`, with no TLS. S3 access keys, secret keys, and object data all travel unencrypted. That's an acceptable tradeoff on a trusted local LAN, but do not expose port 7480 beyond it — anyone on the same network segment can sniff credentials in transit. If you need TLS, terminate it here with `rgw_frontends = "beast port=7480 ssl_port=7443 ssl_certificate=... ssl_private_key=..."` (or a reverse proxy in front of RGW); that's not covered by this guide.
+> **Caveat — HTTP only:** steps 1-7 below configure the `beast` frontend for plain HTTP on port `7480`, with no TLS. S3 access keys, secret keys, and object data all travel unencrypted. That's an acceptable tradeoff on a trusted local LAN, but do not expose port 7480 beyond it — anyone on the same network segment can sniff credentials in transit. Steps 8-10 add TLS with a self-signed certificate if you want it.
 
 1. **Create a scoped cephx user for RGW:**
    On a Proxmox/Ceph admin node, mint a dedicated identity for the gateway instance (replace `gateway-name` with your hostname modifier). Omit `-o` so the full keyring block prints to your terminal for you to copy:
@@ -180,3 +180,35 @@ To keep all client-facing protocols (SMB, NFS, S3) terminating on a single insta
    sudo radosgw-admin user create --uid="local-user" --display-name="Local Storage User"
    ```
    Save the resulting JSON output blocks locally; they contain the explicit `access_key` and `secret_key` parameters required to bind third-party client backup tools over S3 using port `7480` against the gateway VM's IP.
+
+8. **(Optional) Generate a self-signed certificate for TLS:**
+   Good enough to stop plaintext credential sniffing on a trusted LAN; it won't validate against a public CA, so LAN clients will need to either trust it explicitly or skip verification. Replace `gateway-vm-hostname` and `GATEWAY_VM_IP_ADDRESS` with your VM's real hostname and IP:
+   ```bash
+   sudo mkdir -p /etc/ceph/rgw-tls
+   sudo openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
+     -keyout /etc/ceph/rgw-tls/rgw.key \
+     -out /etc/ceph/rgw-tls/rgw.crt \
+     -subj "/CN=gateway-vm-hostname" \
+     -addext "subjectAltName=DNS:gateway-vm-hostname,IP:GATEWAY_VM_IP_ADDRESS"
+   ```
+   Beast's `ssl_certificate` option expects one PEM file containing the certificate followed by the private key, so concatenate them:
+   ```bash
+   sudo sh -c 'cat /etc/ceph/rgw-tls/rgw.crt /etc/ceph/rgw-tls/rgw.key > /etc/ceph/rgw-tls/rgw-combined.pem'
+   sudo chmod 600 /etc/ceph/rgw-tls/rgw-combined.pem
+   ```
+
+9. **Add an SSL listener to the RGW frontend and restart:**
+   Add `ssl_port` and `ssl_certificate` to the `rgw_frontends` line set in step 4:
+   ```bash
+   sudo sed -i \
+     's|rgw_frontends = "beast port=7480"|rgw_frontends = "beast port=7480 ssl_port=7443 ssl_certificate=/etc/ceph/rgw-tls/rgw-combined.pem"|' \
+     /etc/ceph/ceph.conf
+   sudo systemctl restart ceph-radosgw@rgw.gateway-name
+   ```
+   Leaving plain `port=7480` in place alongside `ssl_port=7443` lets you cut clients over one at a time; once everything speaks `https://<GATEWAY_VM_IP>:7443`, drop `port=7480` from the line and restart again to close off the unencrypted listener.
+
+10. **Verify TLS:**
+    ```bash
+    curl -sk https://localhost:7443
+    ```
+    `-k` skips certificate validation, since it's self-signed. For clients that shouldn't skip validation, distribute `/etc/ceph/rgw-tls/rgw.crt` and have them trust it explicitly rather than using `-k`/insecure mode long-term.

@@ -23,6 +23,8 @@ Progress tracker against `INSTALL.md`.
   - [ ] Enable `ceph-radosgw@rgw.<name>`
   - [ ] Verify RGW is serving on :7480
   - [ ] Create a test S3 user, save access/secret keys
+  - [ ] (Optional) Generate self-signed cert, add `ssl_port=7443` to `rgw_frontends`
+  - [ ] (Optional) Verify TLS on :7443, retire plaintext :7480 once clients migrate
 
 ## Notes / issues encountered
 
