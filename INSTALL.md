@@ -1,9 +1,9 @@
 # INSTALL.md: Ceph Storage Gateway on Ubuntu 22.04 LTS
 
-This guide details configuring an Ubuntu 22.04 LTS Virtual Machine (VM) running on Proxmox 9 to act as a protocol gateway. It securely mounts a CephFS storage pool and surfaces **SMB, NFSv4, and S3** interfaces to local network clients using the 45Drives open-source software stack.
+This guide details configuring an Ubuntu 22.04 LTS Virtual Machine (VM) running on Proxmox VE 8.4 or 9 to act as a protocol gateway. It securely mounts a CephFS storage pool and surfaces **SMB, NFSv4, and S3** interfaces to local network clients using the 45Drives open-source software stack.
 
 ## Architecture Prerequisites
-* **Hypervisor:** Proxmox VE 9 cluster with an active, working Ceph configuration.
+* **Hypervisor:** Proxmox VE 8.4 or 9 cluster with an active, working Ceph configuration. Both ship a compatible Ceph Squid release, and everything the gateway VM does — kernel CephFS mount, cephx auth, RGW as a plain Ceph client — talks to the cluster over the standard Ceph client protocol, not `pveceph`/host-side tooling, so it isn't sensitive to which of the two you're running.
 * **Storage backend:** An active CephFS pool managed on the Proxmox layer (requires an active Metadata Server/MDS).
 * **Gateway Instance:** A clean Ubuntu 22.04 LTS VM with its network adapter bound to a local Proxmox bridge (`vmbr0`) for explicit local IP assignment.
 

@@ -1,6 +1,6 @@
 # ceph-gateway-45drive
 
-A protocol gateway VM (Ubuntu 22.04 LTS on Proxmox VE 9) that mounts a CephFS pool and
+A protocol gateway VM (Ubuntu 22.04 LTS on Proxmox VE 8.4 or 9) that mounts a CephFS pool and
 re-exposes it to the local network over SMB, NFSv4, and S3, using the 45Drives open-source
 Cockpit stack (Houston UI plugins) for SMB/NFS and native Ceph RGW for S3.
 
