@@ -119,6 +119,8 @@ Log in using your **Ubuntu system credentials** (ensure the user account belongs
 
 To keep all client-facing protocols (SMB, NFS, S3) terminating on a single instance, RGW runs on the Ubuntu gateway VM itself rather than on the Proxmox host. This is additive to the Ceph cluster — it does not modify or replace anything managed by `pveceph` — but it does mean RGW's lifecycle (installs, upgrades, restarts) is handled manually on the VM instead of through the Proxmox Ceph GUI.
 
+> **Caveat — HTTP only:** the `beast` frontend below is configured for plain HTTP on port `7480`, with no TLS. S3 access keys, secret keys, and object data all travel unencrypted. That's an acceptable tradeoff on a trusted local LAN, but do not expose port 7480 beyond it — anyone on the same network segment can sniff credentials in transit. If you need TLS, terminate it here with `rgw_frontends = "beast port=7480 ssl_port=7443 ssl_certificate=... ssl_private_key=..."` (or a reverse proxy in front of RGW); that's not covered by this guide.
+
 1. **Create a scoped cephx user for RGW:**
    On a Proxmox/Ceph admin node, mint a dedicated identity for the gateway instance (replace `gateway-name` with your hostname modifier). Omit `-o` so the full keyring block prints to your terminal for you to copy:
    ```bash
