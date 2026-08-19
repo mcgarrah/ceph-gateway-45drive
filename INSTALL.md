@@ -212,3 +212,19 @@ To keep all client-facing protocols (SMB, NFS, S3) terminating on a single insta
     curl -sk https://localhost:7443
     ```
     `-k` skips certificate validation, since it's self-signed. For clients that shouldn't skip validation, distribute `/etc/ceph/rgw-tls/rgw.crt` and have them trust it explicitly rather than using `-k`/insecure mode long-term.
+
+---
+
+## Future Work: Firewall / ufw (Not Yet Configured)
+
+This guide deliberately does not enable `ufw` or add any firewall rules on the gateway VM — that's out of scope until the gateway is validated end-to-end on an open LAN first. When it's time to lock this down, the ports involved are:
+
+| Port | Protocol | Service |
+|---|---|---|
+| `9090/tcp` | HTTPS | Cockpit web UI |
+| `445/tcp`, `139/tcp` | SMB | Samba |
+| `2049/tcp` | NFSv4 | nfs-kernel-server |
+| `7480/tcp` | HTTP | RGW (plaintext) |
+| `7443/tcp` | HTTPS | RGW, if TLS was enabled in step 8-10 above |
+
+The eventual rules should scope each of these to the local subnet only (e.g. `ufw allow from 192.168.1.0/24 to any port 9090`) rather than opening them broadly, and should drop `7480` entirely once RGW clients have migrated to `7443`. Not implemented here.

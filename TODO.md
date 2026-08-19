@@ -25,6 +25,7 @@ Progress tracker against `INSTALL.md`.
   - [ ] Create a test S3 user, save access/secret keys
   - [ ] (Optional) Generate self-signed cert, add `ssl_port=7443` to `rgw_frontends`
   - [ ] (Optional) Verify TLS on :7443, retire plaintext :7480 once clients migrate
+- [ ] Deferred: Configure firewall/ufw on the gateway VM (see INSTALL.md "Future Work" — not implemented yet, do this after the gateway is validated end-to-end)
 
 ## Notes / issues encountered
 
