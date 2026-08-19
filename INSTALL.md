@@ -100,6 +100,8 @@ Open a web browser on your network and point it to the VM's specific instance UR
 
 Log in using your **Ubuntu system credentials** (ensure the user account belongs to the standard `sudo` group).
 
+> **Note:** Cockpit serves this over HTTPS with a self-signed certificate by default. Your browser will show a trust warning on first visit — you'll need to click through a manual "accept the risk" / "proceed anyway" exception (or import Cockpit's cert into your system/browser trust store) before it will let you in. This isn't covered further here; it's the same self-signed-cert tradeoff as RGW's optional TLS in Step 5.
+
 ### Configuring SMB Shares (Windows/macOS Compatible)
 0. If it doesn't already exist, create the target subdirectory first: `sudo mkdir -p /mnt/cephfs/your_target_folder`.
 1. Select the **File Sharing** module inside the Cockpit side navigation window.
@@ -211,7 +213,14 @@ To keep all client-facing protocols (SMB, NFS, S3) terminating on a single insta
     ```bash
     curl -sk https://localhost:7443
     ```
-    `-k` skips certificate validation, since it's self-signed. For clients that shouldn't skip validation, distribute `/etc/ceph/rgw-tls/rgw.crt` and have them trust it explicitly rather than using `-k`/insecure mode long-term.
+    `-k` skips certificate validation, since it's self-signed.
+
+    **Self-signed certs are not trusted by default — every client needs a manual step.** A self-signed cert has no chain back to a CA your clients already trust, so each one will reject or warn on it until you either tell it to trust `/etc/ceph/rgw-tls/rgw.crt` specifically, or fall back to skipping validation (not recommended beyond initial testing). This has to be done per client/tool; there's no single fix:
+    - **Browsers:** click through the "not secure" / "proceed anyway" warning, or import `rgw.crt` into the OS/browser trust store.
+    - **AWS CLI:** `aws --endpoint-url https://<GATEWAY_VM_IP>:7443 --ca-bundle /path/to/rgw.crt s3 ls`, or set `AWS_CA_BUNDLE`.
+    - **s3cmd:** add `--ca-certs=/path/to/rgw.crt` to `~/.s3cfg` or the command line.
+    - **rclone:** set `client_cert`/`ca_cert` on the S3 remote's config (`rclone config`), or `--no-check-certificate` for testing only.
+    - **System-wide trust (Debian/Ubuntu clients):** copy `rgw.crt` to `/usr/local/share/ca-certificates/`, then `sudo update-ca-certificates` — makes every tool on that client trust it without per-tool flags.
 
 ---
 
