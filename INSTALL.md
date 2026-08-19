@@ -24,15 +24,23 @@ sudo apt install -y ceph-common attr samba-common-bin
 
 To share file storage over SMB and NFS, you must first link the VM's kernel filesystem to the cluster's CephFS directory.
 
-1. **Extract your credentials from Proxmox:**
-   Log into any of your physical Proxmox nodes and view your Ceph administrative keyring file (`/etc/ceph/ceph.client.admin.keyring`). Copy the alphanumeric string found next to `key = `.
+1. **Create a scoped cephx user on a Proxmox/Ceph admin node:**
+   Do not use the cluster admin keyring on the gateway VM. Instead, mint a dedicated `client.gateway` user restricted to the CephFS filesystem you're exporting:
+   ```bash
+   ceph fs authorize cephfs client.gateway / rw
+   ```
+   Replace `cephfs` with your filesystem name if different. This grants `client.gateway` read/write MDS and OSD caps scoped to that filesystem only (no mon/osd admin, no access to other pools).
 
-2. **Save the key file on your Gateway VM:**
+2. **Retrieve the key and save it on your Gateway VM:**
+   On the admin node:
+   ```bash
+   ceph auth print-key client.gateway
+   ```
    On your Ubuntu VM, create a path to hold this access credential securely:
    ```bash
    sudo mkdir -p /etc/ceph
-   echo "YOUR_COPIED_KEY_STRING_HERE" | sudo tee /etc/ceph/ceph.client.admin.secret
-   sudo chmod 600 /etc/ceph/ceph.client.admin.secret
+   echo "YOUR_COPIED_KEY_STRING_HERE" | sudo tee /etc/ceph/ceph.client.gateway.secret
+   sudo chmod 600 /etc/ceph/ceph.client.gateway.secret
    ```
 
 3. **Configure Persistent Boot Mounts:**
@@ -46,7 +54,7 @@ To share file storage over SMB and NFS, you must first link the VM's kernel file
    ```
    Append the following line to the bottom of the file. Replace `MON_IP_1`, `MON_IP_2`, and `MON_IP_3` with the actual LAN IP addresses of your Proxmox Ceph Monitor nodes:
    ```text
-   MON_IP_1:6789,MON_IP_2:6789,MON_IP_3:6789:/ /mnt/cephfs ceph name=admin,secretfile=/etc/ceph/ceph.client.admin.secret,noatime,_netdev 0 0
+   MON_IP_1:6789,MON_IP_2:6789,MON_IP_3:6789:/ /mnt/cephfs ceph name=gateway,secretfile=/etc/ceph/ceph.client.gateway.secret,noatime,_netdev 0 0
    ```
    *(Note: The `_netdev` parameter forces the OS to delay mounting until after network interfaces are online).*
 
@@ -93,6 +101,7 @@ Open a web browser on your network and point it to the VM's specific instance UR
 Log in using your **Ubuntu system credentials** (ensure the user account belongs to the standard `sudo` group).
 
 ### Configuring SMB Shares (Windows/macOS Compatible)
+0. If it doesn't already exist, create the target subdirectory first: `sudo mkdir -p /mnt/cephfs/your_target_folder`.
 1. Select the **File Sharing** module inside the Cockpit side navigation window.
 2. Select the **Samba** tab and choose **Add Share** (`+`).
 3. Set the directory path specifically to point to your cluster subdirectory: `/mnt/cephfs/your_target_folder`.
@@ -106,23 +115,66 @@ Log in using your **Ubuntu system credentials** (ensure the user account belongs
 
 ---
 
-## Step 5: Provision S3 Object Gates (Proxmox Native Path)
+## Step 5: Provision S3 Object Gateway (RADOS Gateway on the Gateway VM)
 
-To avoid breaking python translations on 45Drives plugins, handle cloud-native object endpoints directly through the underlying Ceph core architecture via your Proxmox environment.
+To keep all client-facing protocols (SMB, NFS, S3) terminating on a single instance, RGW runs on the Ubuntu gateway VM itself rather than on the Proxmox host. This is additive to the Ceph cluster — it does not modify or replace anything managed by `pveceph` — but it does mean RGW's lifecycle (installs, upgrades, restarts) is handled manually on the VM instead of through the Proxmox Ceph GUI.
 
-1. **Deploy the RADOS Gateway:**
-   Log directly into your Proxmox 9 host node terminal and run:
+1. **Create a scoped cephx user for RGW:**
+   On a Proxmox/Ceph admin node, mint a dedicated identity for the gateway instance (replace `gateway-name` with your hostname modifier). Omit `-o` so the full keyring block prints to your terminal for you to copy:
    ```bash
-   sudo apt update && sudo apt install ceph-radosgw -y
+   ceph auth get-or-create client.rgw.gateway-name mon 'allow rw' osd 'allow rwx'
    ```
-2. **Bootstrap the Service Instance:**
-   Create the gateway entry point. Replace `gateway-name` with your hostname modifier:
+   This grants only what RGW needs to operate — no admin caps. Note the `osd` cap is necessarily broader than the CephFS client's in Step 2, since RGW auto-creates and manages its own `.rgw.*` pools at runtime.
+
+2. **Provide cluster connection info on the Gateway VM:**
+   The kernel CephFS mount from Step 2 didn't require a `ceph.conf`, but RGW does. Create one with your monitor addresses:
+   ```bash
+   sudo tee /etc/ceph/ceph.conf <<EOF
+   [global]
+   mon_host = MON_IP_1,MON_IP_2,MON_IP_3
+   EOF
+   ```
+   Paste the keyring block from step 1 into a keyring file on the VM and lock down its permissions:
+   ```bash
+   sudo tee /etc/ceph/ceph.client.rgw.gateway-name.keyring <<EOF
+   [client.rgw.gateway-name]
+       key = YOUR_COPIED_RGW_KEY_STRING_HERE
+   EOF
+   sudo chmod 600 /etc/ceph/ceph.client.rgw.gateway-name.keyring
+   ```
+
+3. **Install the RADOS Gateway package on the Gateway VM:**
+   ```bash
+   sudo apt update && sudo apt install -y radosgw
+   ```
+
+4. **Add the RGW instance config to `ceph.conf`:**
+   `host` must match the gateway VM's `hostname -s` output.
+   ```bash
+   sudo tee -a /etc/ceph/ceph.conf <<EOF
+
+   [client.rgw.gateway-name]
+   host = gateway-vm-hostname
+   rgw_frontends = "beast port=7480"
+   keyring = /etc/ceph/ceph.client.rgw.gateway-name.keyring
+   EOF
+   ```
+
+5. **Enable and start the RGW daemon:**
    ```bash
    sudo systemctl enable --now ceph-radosgw@rgw.gateway-name
    ```
-3. **Provision Object Storage Users:**
-   Generate active keys to connect external local applications:
+
+6. **Verify RGW is serving:**
    ```bash
-   radosgw-admin user create --uid="local-user" --display-name="Local Storage User"
+   sudo systemctl status ceph-radosgw@rgw.gateway-name --no-pager
+   curl -s http://localhost:7480
    ```
-   Save the resulting JSON output blocks locally; they contain the explicit `access_key` and `secret_key` parameters required to bind third-party client backup tools over S3 using port `7480`.
+   A `ListAllMyBucketsResult` (anonymous access denied) XML response confirms the daemon is up and listening on 7480.
+
+7. **Provision Object Storage Users:**
+   Run directly on the gateway VM now that `ceph-common`/`radosgw-admin` are local:
+   ```bash
+   sudo radosgw-admin user create --uid="local-user" --display-name="Local Storage User"
+   ```
+   Save the resulting JSON output blocks locally; they contain the explicit `access_key` and `secret_key` parameters required to bind third-party client backup tools over S3 using port `7480` against the gateway VM's IP.
